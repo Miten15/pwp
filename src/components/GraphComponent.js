@@ -1,11 +1,9 @@
 import React, { useEffect, useRef } from "react";
 import * as d3 from "d3";
-import { Network, Server, Router, Monitor, Cpu } from 'lucide-react';
+import { Network, Server, Router, Monitor, Cpu, Laptop, Database } from 'lucide-react';
 import ReactDOMServer from "react-dom/server";
 import { CiServer, CiRouter, CiDesktop } from "react-icons/ci";
-import { CircuitBoard } from 'lucide-react';
 
-// Add CSS for the blinking animation and other visual effects
 const styles = `
   @keyframes blink {
     0% { opacity: 0.4; }
@@ -26,122 +24,113 @@ const styles = `
   .link:hover {
     stroke: rgba(255, 255, 255, 0.8);
   }
+  .cluster-boundary {
+    fill: none;
+    stroke-width: 2;
+    stroke-dasharray: 5;
+  }
+  .cluster-center {
+    fill: rgba(255, 255, 255, 0.1);
+  }
+  .node-not-found {
+    opacity: 0.5;
+  }
 `;
 
 const GraphComponent = ({ data }) => {
   const svgRef = useRef();
-  const tooltipRef = useRef();
 
   useEffect(() => {
-    // Add the styles to the document
     const styleSheet = document.createElement("style");
     styleSheet.innerText = styles;
     document.head.appendChild(styleSheet);
 
     if (!data || !Array.isArray(data) || !data[0].mac_data) {
-      console.error('Invalid data format. Expected an array with "mac_data".');
+      console.error('Invalid data format');
       return;
     }
 
-    const macData = data[0].mac_data;
-    const nodes = [];
-    const links = [];
-    const unknownNodes = [];
+    const width = 1600;
+    const height = 1200;
+    const verticalSpacing = height / 3;
 
-    // Define cluster nodes with fixed positions, larger areas, and icons
+    // Define clusters with increased spacing
     const clusters = {
       IT: {
         id: "IT_Cluster",
-        label: "IT Cluster",
-        color: "#4287f5",
-        x: 400,
-        y: 800,
-        width: 600,
-        height: 1800,
-        icon: CiServer,
+        label: "IT",
+        color: "#ffffff",
+        x: width * 0.25,
+        y: height * 0.3,
+        radius: 250,
+        icon: Laptop,
+        nodeIcon: Laptop
       },
       Network: {
         id: "Network_Cluster",
-        label: "Network Cluster",
-        color: "#f54242",
-        x: 950,
-        y: 600,
-        width: 600,
-        height: 1800,
-        icon: CiRouter,
+        label: "Network",
+        color: "#3b82f6",
+        x: width * 0.75,
+        y: height * 0.3,
+        radius: 250,
+        icon: Router,
+        nodeIcon: Router
       },
       OT: {
         id: "OT_Cluster",
-        label: "OT Cluster",
-        color: "#42f54e",
-        x: 1500,
-        y: 800,
-        width: 600,
-        height: 1800,
-        icon: Network,
+        label: "OT",
+        color: "#f97316",
+        x: width * 0.5,
+        y: height * 0.7,
+        radius: 250,
+        icon: Cpu,
+        nodeIcon: Cpu
       },
     };
 
-    // Add cluster nodes
+    const nodes = [];
+    const links = [];
+    const nodeMap = new Map();
+
+    // Add cluster center nodes
     Object.values(clusters).forEach((cluster) => {
-      nodes.push({
+      const clusterNode = {
         ...cluster,
         fx: cluster.x,
         fy: cluster.y,
-      });
+        isCluster: true,
+      };
+      nodes.push(clusterNode);
+      nodeMap.set(cluster.id, clusterNode);
     });
 
-    // Add inter-cluster links
-    const clusterLinks = [
-      {
-        source: "IT_Cluster",
-        target: "Network_Cluster",
-        protocol: "Inter-cluster Communication",
-      },
-      {
-        source: "Network_Cluster",
-        target: "OT_Cluster",
-        protocol: "Inter-cluster Communication",
-      },
-      {
-        source: "OT_Cluster",
-        target: "IT_Cluster",
-        protocol: "Inter-cluster Communication",
-      },
-    ];
-    links.push(...clusterLinks);
-
-    // Process device nodes and create links based on connections
-    const nodeMap = new Map();
-
-    macData.forEach((category) => {
+    // Process device nodes
+    data[0].mac_data.forEach((category) => {
       const deviceType = Object.keys(category)[0].split(" ")[0];
       const devices = category[Object.keys(category)[0]];
 
-      devices.forEach((device, deviceIndex) => {
-        const cluster = clusters[deviceType];
-        const gridSize = 150;
-        const gridX = cluster.x + (Math.floor(deviceIndex / 5) * gridSize);
-        const gridY = cluster.y + ((deviceIndex % 5) * gridSize);
-
+      devices.forEach((device) => {
         const deviceNode = {
           id: device.MAC,
           IP: Array.isArray(device.IP) ? device.IP.join(", ") : device.IP,
           MAC: device.MAC,
           Vendor: device.Vendor,
-          Protocol: Array.isArray(device.Protocol)
-            ? device.Protocol.join(", ")
-            : device.Protocol,
-          Port: Array.isArray(device.Port)
-            ? device.Port.join(", ")
-            : device.Port,
+          Protocol: Array.isArray(device.Protocol) ? device.Protocol.join(", ") : device.Protocol,
+          Port: Array.isArray(device.Port) ? device.Port.join(", ") : device.Port,
           status: device.status,
           type: deviceType,
-          connections: device[device.MAC],
-          x: gridX,
-          y: gridY,
+          cluster: deviceType,
         };
+
         nodeMap.set(device.MAC, deviceNode);
+        nodes.push(deviceNode);
+
+        // Add link to cluster center
+        links.push({
+          source: device.MAC,
+          target: `${deviceType}_Cluster`,
+          type: deviceType.toLowerCase(),
+        });
 
         // Create links based on device connections
         if (Array.isArray(device[device.MAC])) {
@@ -150,262 +139,179 @@ const GraphComponent = ({ data }) => {
               links.push({
                 source: device.MAC,
                 target: connectedMAC,
-                protocol: Array.isArray(device.Protocol)
-                  ? device.Protocol
-                  : [device.Protocol],
+                type: deviceType.toLowerCase(),
               });
-
-              // Ensure the connected node exists
-              if (!nodeMap.has(connectedMAC)) {
-                nodeMap.set(connectedMAC, {
-                  id: connectedMAC,
-                  MAC: connectedMAC,
-                  type: "Unknown",
-                  Vendor: "Unknown",
-                  status: "false",
-                });
-              }
             }
           });
         }
-
-        // Add link to cluster
-        links.push({
-          source: device.MAC,
-          target: `${deviceType}_Cluster`,
-          protocol: Array.isArray(device.Protocol)
-            ? device.Protocol
-            : [device.Protocol],
-        });
       });
     });
 
-    // Convert nodeMap to nodes array
-    nodes.push(...nodeMap.values());
+    // Add nodes for MACs that are not found in the original data
+    links.forEach((link) => {
+      ['source', 'target'].forEach((endpoint) => {
+        if (typeof link[endpoint] === 'string' && !nodeMap.has(link[endpoint])) {
+          const notFoundNode = {
+            id: link[endpoint],
+            MAC: link[endpoint],
+            Vendor: "Unknown",
+            type: "Not Found",
+            cluster: "Not Found",
+            status: "false",
+          };
+          nodeMap.set(link[endpoint], notFoundNode);
+          nodes.push(notFoundNode);
+        }
+      });
+    });
 
-    // Separate unknown nodes for individual simulation
-    unknownNodes.push(...nodeMap.values().filter(node => node.type === "Unknown"));
+    // Add inter-cluster links
+    Object.values(clusters).forEach((source, index, array) => {
+      const target = array[(index + 1) % array.length];
+      links.push({
+        source: source.id,
+        target: target.id,
+        type: 'inter-cluster',
+      });
+    });
 
-    const width = 1950;
-    const height = 1200;
-
-    // Remove existing tooltips
-    d3.selectAll(".graph-tooltip").remove();
-    d3.selectAll(".link-tooltip").remove();
-
-    // Create node tooltip with mouse following behavior
-    const tooltipContainer = d3
-      .select("body")
-      .append("div")
-      .attr("class", "graph-tooltip")
-      .style("position", "absolute")
-      .style("width", "max-content")
-      .style("max-width", "600px")
-      .style("background-color", "#1a1a1a")
-      .style("color", "white")
-      .style("padding", "12px 16px")
-      .style("border", "1px solid rgba(255, 255, 255, 0.1)")
-      .style("border-radius", "8px")
-      .style("font-size", "13px")
-      .style("font-family", "system-ui, -apple-system, sans-serif")
-      .style("pointer-events", "none")
-      .style("opacity", 0)
-      .style("z-index", 9999)
-      .style("box-shadow", "0 4px 16px rgba(0, 0, 0, 0.4)")
-      .style("backdrop-filter", "blur(8px)")
-      .style("transition", "opacity 0.2s ease-out")
-      .style("overflow-wrap", "break-word")
-      .style("word-wrap", "break-word");
-
-    // Create link tooltip with smooth animation
-    const linkTooltip = d3
-      .select("body")
-      .append("div")
-      .attr("class", "link-tooltip")
-      .style("position", "absolute")
-      .style("background-color", "rgba(0, 0, 0, 0.9)")
-      .style("color", "white")
-      .style("padding", "8px")
-      .style("border-radius", "4px")
-      .style("font-size", "12px")
-      .style("pointer-events", "none")
-      .style("opacity", 0)
-      .style("z-index", 9999)
-      .style("transition", "all 0.2s ease-out");
-
-    // Clear existing SVG content
-    const svg = d3
-      .select(svgRef.current)
-      .attr("width", width)
-      .attr("height", height);
-
-    // Add a subtle gradient background
-    const gradient = svg.append("defs")
-      .append("linearGradient")
-      .attr("id", "bg-gradient")
-      .attr("x1", "0%")
-      .attr("y1", "0%")
-      .attr("x2", "100%")
-      .attr("y2", "100%");
-
-    gradient.append("stop")
-      .attr("offset", "0%")
-      .attr("style", "stop-color:#1a1a1a;stop-opacity:1");
-
-    gradient.append("stop")
-      .attr("offset", "100%")
-      .attr("style", "stop-color:#2d2d2d;stop-opacity:1");
-
-    svg.append("rect")
+    // SVG setup
+    const svg = d3.select(svgRef.current)
       .attr("width", width)
       .attr("height", height)
-      .attr("fill", "url(#bg-gradient)");
-
+      .style("background", "#111");
 
     svg.selectAll("*").remove();
 
     // Add zoom behavior
-    const zoom = d3
-      .zoom()
-      .scaleExtent([0.5, 5])
+    const zoom = d3.zoom()
+      .scaleExtent([0.5, 2])
       .on("zoom", (event) => {
         container.attr("transform", event.transform);
       });
 
     svg.call(zoom);
-
-    // Create a container for all elements
     const container = svg.append("g");
 
-    // Create arrow marker for links
-    svg
-      .append("defs")
-      .selectAll("marker")
-      .data(["end"])
-      .join("marker")
-      .attr("id", "arrow")
-      .attr("viewBox", "0 -5 10 10")
-      .attr("refX", 20)
-      .attr("refY", 0)
-      .attr("markerWidth", 6)
-      .attr("markerHeight", 6)
-      .attr("orient", "auto")
-      .append("path")
-      .attr("fill", "#999")
-      .attr("d", "M0,-5L10,0L0,5");
+    // Add cluster boundaries
+    const clusterBoundaries = container.selectAll(".cluster-boundary")
+      .data(Object.values(clusters))
+      .join("circle")
+      .attr("class", d => `cluster-boundary cluster-${d.id.toLowerCase()}`)
+      .attr("cx", d => d.x)
+      .attr("cy", d => d.y)
+      .attr("r", d => d.radius)
+      .attr("stroke", d => d.color)
+      .style("stroke-dasharray", "5,5")
+      .style("fill", "none");
 
-    // Force simulation
-    const simulation = d3
-      .forceSimulation(nodes)
-      .force("link", d3.forceLink(links).id(d => d.id).distance(200).strength(0.2))
-      .force("charge", d3.forceManyBody().strength(-1500))
-      .force("collision", d3.forceCollide().radius(80).strength(0.9))
-      .force("x", d3.forceX(d => {
-        if (d.id.includes("Cluster")) return d.fx;
-        const gridSize = 200;
-        return Math.round(d.x / gridSize) * gridSize;
-      }).strength(0.3))
-      .force("y", d3.forceY(d => {
-        if (d.id.includes("Cluster")) return d.fy;
-        const gridSize = 200;
-        return Math.round(d.y / gridSize) * gridSize;
-      }).strength(0.3));
+    // Create tooltips
+    const tooltip = d3.select("body")
+      .append("div")
+      .attr("class", "graph-tooltip")
+      .style("position", "absolute")
+      .style("background-color", "rgba(0, 0, 0, 0.8)")
+      .style("color", "white")
+      .style("padding", "10px")
+      .style("border-radius", "5px")
+      .style("font-size", "12px")
+      .style("pointer-events", "none")
+      .style("opacity", 0);
 
-
-    // Update the unknown nodes simulation
-    const unknownSimulation = d3.forceSimulation(unknownNodes)
-      .force("x", d3.forceX(width * 0.95).strength(0.7))
-      .force("y", d3.forceY(height * 0.95).strength(0.7))
-      .force("collision", d3.forceCollide().radius(40));
-
-    // Draw links with curved paths
-    const linkHitArea = container
-      .append("g")
+    // Draw links
+    const link = container.append("g")
       .selectAll("path")
       .data(links)
       .join("path")
+      .attr("class", "link")
+      .attr("stroke", d => {
+        if (d.type === 'it') return "#ffffff";
+        if (d.type === 'network') return "#3b82f6";
+        if (d.type === 'ot') return "#f97316";
+        if (d.type === 'inter-cluster') return "#666";
+        return "#666";
+      })
+      .attr("stroke-opacity", d => d.type === 'inter-cluster' ? 0.4 : 0.2)
+      .attr("stroke-width", d => d.type === 'inter-cluster' ? 3 : 1.5)
+      .attr("fill", "none");
+
+    // Add invisible wider path for better hover detection
+    const linkHitArea = container.append("g")
+      .selectAll("path")
+      .data(links)
+      .join("path")
+      .attr("class", "link-hit-area")
       .attr("stroke", "transparent")
       .attr("stroke-width", 10)
       .attr("fill", "none")
       .on("mouseover", (event, d) => {
-        const content = `
-          <strong>Protocols:</strong><br>
-          ${Array.isArray(d.protocol) ? d.protocol.join("<br>") : d.protocol}
-        `;
-
-        const mouseX = event.pageX;
-        const mouseY = event.pageY;
-
-        linkTooltip
-          .html(content)
-          .style("left", `${mouseX + 15}px`)
-          .style("top", `${mouseY}px`)
-          .style("opacity", 1);
-
         // Highlight the corresponding visible link
-        link
-          .filter((l) => l === d)
-          .attr("stroke-opacity", 1)
-          .attr("stroke-width", (d) =>
-            d.source.id?.includes("Cluster") && d.target.id?.includes("Cluster")
-              ? 4
-              : 2
-          );
+        link.filter(l => l === d)
+          .attr("stroke-opacity", 0.8)
+          .attr("stroke-width", d.type === 'inter-cluster' ? 4 : 2);
+
+        // Show tooltip
+        const sourceNode = nodeMap.get(d.source.id || d.source);
+        const targetNode = nodeMap.get(d.target.id || d.target);
+        
+        tooltip.transition()
+          .duration(200)
+          .style("opacity", 0.9);
+        
+        tooltip.html(`
+          <div style="padding: 8px;">
+            <strong>Connection:</strong><br/>
+            From: ${sourceNode?.Vendor || sourceNode?.label || sourceNode?.id || 'Unknown'}<br/>
+            To: ${targetNode?.Vendor || targetNode?.label || targetNode?.id || 'Unknown'}<br/>
+            ${sourceNode?.Protocol ? `Protocol: ${sourceNode.Protocol}` : ''}
+          </div>
+        `)
+          .style("left", (event.pageX + 10) + "px")
+          .style("top", (event.pageY - 28) + "px");
       })
       .on("mouseout", (event, d) => {
-        linkTooltip.style("opacity", 0);
-        link
-          .filter((l) => l === d)
-          .attr("stroke-opacity", 0.4)
-          .attr("stroke-width", (d) =>
-            d.source.id?.includes("Cluster") && d.target.id?.includes("Cluster")
-              ? 2
-              : 1
-          );
+        // Reset link appearance
+        link.filter(l => l === d)
+          .attr("stroke-opacity", d.type === 'inter-cluster' ? 0.4 : 0.2)
+          .attr("stroke-width", d.type === 'inter-cluster' ? 3 : 1.5);
+
+        // Hide tooltip
+        tooltip.transition()
+          .duration(500)
+          .style("opacity", 0);
       });
 
-    // Draw nodes with improved hit detection
-    const nodeGroup = container
-      .append("g")
+    // Draw nodes
+    const node = container.append("g")
       .selectAll("g")
       .data(nodes)
       .join("g")
-      .style("cursor", "pointer");
+      .attr("class", d => `node ${d.type === 'Not Found' ? 'node-not-found' : ''}`)
+      .call(d3.drag()
+        .on("start", dragstarted)
+        .on("drag", dragged)
+        .on("end", dragended));
 
-    // Add hit area for better interaction
-    const nodeHitArea = nodeGroup
-      .append("rect")
-      .attr("width", 24)
-      .attr("height", 24)
-      .attr("x", -12)
-      .attr("y", -12)
-      .attr("fill", "transparent")
-      .style("pointer-events", "all");
+    // Add background circles for cluster centers
+    node.filter(d => d.isCluster)
+      .append("circle")
+      .attr("class", "cluster-center")
+      .attr("r", 30)
+      .attr("fill", d => d.color)
+      .attr("fill-opacity", 0.2)
+      .attr("stroke", d => d.color)
+      .attr("stroke-width", 2);
 
-    // Add icons for all nodes
-    const getIconForDevice = (type) => {
-      const iconMap = {
-        IT: CiDesktop,
-        OT: CircuitBoard,
-        Network: Router,
-        IT_Cluster: CiServer,
-        OT_Cluster: Network,
-        Network_Cluster: CiRouter,
-      };
-      return iconMap[type] || Network;
-    };
-
-    nodeGroup.each(function (d) {
-      const IconComponent = getIconForDevice(d.type || d.id);
+    // Add icons for nodes
+    node.each(function(d) {
+      const IconComponent = d.isCluster ? d.icon : (clusters[d.type]?.nodeIcon || Database);
       if (IconComponent) {
-        const foreignObject = d3
-          .select(this)
+        const foreignObject = d3.select(this)
           .append("foreignObject")
-          .attr("width", 24)
-          .attr("height", 24)
-          .attr("x", -12)
-          .attr("y", -12)
-          .style("pointer-events", "none");
+          .attr("width", d.isCluster ? 40 : 24)
+          .attr("height", d.isCluster ? 40 : 24)
+          .attr("x", d.isCluster ? -20 : -12)
+          .attr("y", d.isCluster ? -20 : -12);
 
         const div = foreignObject
           .append("xhtml:div")
@@ -413,397 +319,176 @@ const GraphComponent = ({ data }) => {
           .style("height", "100%")
           .style("display", "flex")
           .style("align-items", "center")
-          .style("justify-content", "center")
-          .style("pointer-events", "none");
+          .style("justify-content", "center");
 
         const icon = document.createElement("div");
         icon.innerHTML = ReactDOMServer.renderToStaticMarkup(
-          <IconComponent
-            width={16}
-            height={16}
-            stroke="white"
-            strokeWidth={1}
+          <IconComponent 
+            width={d.isCluster ? 24 : 16} 
+            height={d.isCluster ? 24 : 16} 
+            stroke={d.type === "Not Found" ? "#999" : "white"} 
+            strokeWidth={1.5} 
           />
         );
         div.node().appendChild(icon.firstChild);
       }
-
-      // Add status indicator dot below the icon
-      if (!d.id.includes("Cluster")) {
-        d3.select(this)
-          .append("circle")
-          .attr("class", "status-indicator")
-          .attr("r", 3)
-          .attr("cx", 0)
-          .attr("cy", 14)
-          .attr("fill", d.status === "true" ? "#00ff00" : "#ff0000")
-          .style("pointer-events", "none");
-      }
-
-      if (d.id.includes("Cluster")) {
-        d3.select(this)
-          .append("circle")
-          .attr("r", 30)
-          .attr("fill", d.color || "#666")
-          .attr("opacity", 0.3)
-          .style("pointer-events", "none");
-      }
     });
 
-    // Add labels with pointer-events disabled and collision detection
-    const labels = nodeGroup
-      .append("text")
-      .attr("dy", (d) => (d.id.includes("Cluster") ? -30 : -18))
+    // Add labels
+    node.append("text")
+      .attr("dy", d => d.isCluster ? -40 : -20)
       .attr("text-anchor", "middle")
+      .text(d => d.isCluster ? d.label : (d.Vendor || d.id))
       .attr("fill", "white")
-      .attr("font-size", "12px")
-      .style("pointer-events", "none")
-      .text((d) => (d.id.includes("Cluster") ? d.label : d.Vendor));
+      .attr("font-size", d => d.isCluster ? "16px" : "12px");
 
-    // Enhanced tooltip behavior with mouse following and dynamic sizing
-    const showTooltip = (event, d) => {
-      if (!d.id.includes("Cluster")) {
-        const content = `
-          <div style="display: grid; gap: 8px;">
-            <div style="display: grid; gap: 4px;">
-              <div style="display: flex; gap: 8px; align-items: start;">
-                <div style="color: rgba(255,255,255,0.7); min-width: 70px;">MAC:</div>
-                <div style="font-family: monospace; word-break: break-all;">${
-                  d.MAC
-                }</div>
-              </div>
-              <div style="display: flex; gap: 8px; align-items: start;">
-                <div style="color: rgba(255,255,255,0.7); min-width: 70px;">IP:</div>
-                <div style="font-family: monospace;">${d.IP || "N/A"}</div>
-              </div>
-              <div style="display: flex; gap: 8px; align-items: start;">
-                <div style="color: rgba(255,255,255,0.7); min-width: 70px;">Vendor:</div>
-                <div>${d.Vendor || "Unknown"}</div>
-              </div>
-              <div style="display: flex; gap: 8px; align-items: start;">
-                <div style="color: rgba(255,255,255,0.7); min-width: 70px;">Type:</div>
-                <div>${d.type}</div>
-              </div>
-              <div style="display: flex; gap: 8px; align-items: start;">
-                <div style="color: rgba(255,255,255,0.7); min-width: 70px;">Status:</div>
-                <div>${d.status === "true" ? "Active" : "Inactive"}</div>
-              </div>
-              ${
-                d.connections
-                  ? `
-              <div style="display: grid; gap: 8px;">
-                  <div style="color: rgba(255,255,255,0.7);">Connected to:</div>
-                   <div style="display: grid; grid-template-columns: repeat(3, auto); gap: 8px; font-family: monospace;">
-                     ${d.connections
-                       .map((conn) => `<div>${conn}</div>`)
-                       .join("")}
-                   </div>
-              </div>
-              `
-                  : ""
-              }
-            </div>
-          </div>
-        `;
+    // Add status indicators
+    node.filter(d => !d.isCluster)
+      .append("circle")
+      .attr("class", "status-indicator")
+      .attr("r", 3)
+      .attr("cy", 8)
+      .attr("fill", d => d.status === "true" ? "#4CAF50" : "#F44336");
 
-        const mouseX = event.pageX;
-        const mouseY = event.pageY;
-
-        // First position the tooltip off-screen to measure its size
-        tooltipContainer
-          .html(content)
-          .style("left", "-9999px")
-          .style("top", "-9999px")
-          .style("opacity", "0")
-          .style("display", "block");
-
-        // Get the actual dimensions after rendering content
-        const tooltipNode = tooltipContainer.node();
-        const tooltipRect = tooltipNode.getBoundingClientRect();
-        const tooltipWidth = tooltipRect.width;
-        const tooltipHeight = tooltipRect.height;
-
-        // Calculate position to keep tooltip within viewport
-        let left = mouseX + 20;
-        let top = mouseY - 10;
-
-        // Adjust horizontal position if tooltip would overflow viewport
-        if (left + tooltipWidth > window.innerWidth - 20) {
-          left = mouseX - tooltipWidth - 20;
-        }
-
-        // Adjust vertical position if tooltip would overflow viewport
-        if (top + tooltipHeight > window.innerHeight - 20) {
-          top = window.innerHeight - tooltipHeight - 20;
-        }
-
-        // Apply the calculated position
-        tooltipContainer
-          .style("left", `${left}px`)
-          .style("top", `${top}px`)
-          .style("opacity", 1);
-
-        // Highlight the node
-        d3.select(event.currentTarget.parentNode)
-          .select("foreignObject")
-          .transition()
+    // Node tooltip
+    node.on("mouseover", (event, d) => {
+      if (!d.isCluster) {
+        tooltip.transition()
           .duration(200)
-          .attr("width", 28)
-          .attr("height", 28)
-          .attr("x", -14)
-          .attr("y", -14);
+          .style("opacity", .9);
+        tooltip.html(`
+          <strong>${d.Vendor || "Unknown Device"}</strong><br/>
+          MAC: ${d.MAC}<br/>
+          IP: ${d.IP || "N/A"}<br/>
+          Type: ${d.type}<br/>
+          Status: ${d.status === "true" ? "Active" : "Inactive"}<br/>
+          ${d.Protocol ? `Protocol: ${d.Protocol}<br/>` : ''}
+          ${d.Port ? `Port: ${d.Port}` : ''}
+        `)
+          .style("left", (event.pageX) + "px")
+          .style("top", (event.pageY - 28) + "px");
       }
-    };
-
-    const hideTooltip = (event) => {
-      tooltipContainer.transition().duration(200).style("opacity", 0);
-
-      d3.select(event.currentTarget.parentNode)
-        .select("foreignObject")
-        .transition()
-        .duration(200)
-        .attr("width", 24)
-        .attr("height", 24)
-        .attr("x", -12)
-        .attr("y", -12);
-    };
-
-    // Update mousemove handler for smooth tooltip following
-    nodeHitArea
-      .on("mouseover", showTooltip)
-      .on("mouseout", hideTooltip)
-      .on("mousemove", (event, d) => {
-        if (!d.id.includes("Cluster")) {
-          const x = event.clientX + window.pageXOffset;
-          const y = event.clientY + window.pageYOffset;
-
-          tooltipContainer
-            .style("left", `${x + 15}px`)
-            .style("top", `${y - 10}px`);
-        }
+    })
+      .on("mouseout", () => {
+        tooltip.transition()
+          .duration(500)
+          .style("opacity", 0);
       });
 
-    // Modified linkArc function to create straight lines
-    function linkArc(d) {
-      const sourceNode = d.source;
-      const targetNode = d.target;
+    // Force simulation with stronger containment and increased node distance
+    const simulation = d3.forceSimulation(nodes)
+      .force("link", d3.forceLink(links)
+        .id(d => d.id)
+        .distance(d => {
+          if (d.source.isCluster && d.target.isCluster) return 400; // Increased distance for inter-cluster links
+          if (d.source.isCluster || d.target.isCluster) return 150;
+          if (d.source.type === "Not Found" || d.target.type === "Not Found") return 200;
+          return 80; // Increased distance between regular nodes
+        })
+      )
+      .force("charge", d3.forceManyBody().strength(d => d.isCluster ? -1000 : -200))
+      .force("collision", d3.forceCollide().radius(d => d.isCluster ? 80 : 30))
+      .force("x", d3.forceX(d => {
+        if (d.type === "Not Found") return width * 0.9;
+        const cluster = clusters[d.cluster];
+        return cluster ? cluster.x : width / 2;
+      }).strength(d => d.type === "Not Found" ? 1 : 0.5))
+      .force("y", d3.forceY(d => {
+        if (d.type === "Not Found") return height * 0.9;
+        const cluster = clusters[d.cluster];
+        return cluster ? cluster.y : height / 2;
+      }).strength(d => d.type === "Not Found" ? 1 : 0.5));
 
-      // Calculate the angle between nodes
-      const dx = targetNode.x - sourceNode.x;
-      const dy = targetNode.y - sourceNode.y;
-      const angle = Math.atan2(dy, dx);
-
-      // Set offset based on node type
-      const sourceOffset = sourceNode.id?.includes("Cluster") ? 30 : 12;
-      const targetOffset = targetNode.id?.includes("Cluster") ? 30 : 12;
-
-      // Calculate start and end points
-      const startX = sourceNode.x + Math.cos(angle) * sourceOffset;
-      const startY = sourceNode.y + Math.sin(angle) * sourceOffset;
-      const endX = targetNode.x - Math.cos(angle) * targetOffset;
-      const endY = targetNode.y - Math.sin(angle) * targetOffset;
-
-      // Return a straight line path
-      return `M${startX},${startY}L${endX},${endY}`;
+    // Drag functions
+    function dragstarted(event) {
+      if (!event.active) simulation.alphaTarget(0.3).restart();
+      event.subject.fx = event.subject.x;
+      event.subject.fy = event.subject.y;
     }
 
-    // Update link paths to use straight lines
-    const link = container
-      .append("g")
-      .selectAll("path")
-      .data(links)
-      .join("path")
-      .attr("stroke", "#999")
-      .attr("stroke-opacity", 0.15)
-      .attr("stroke-width", d => 
-        d.source.id?.includes("Cluster") && d.target.id?.includes("Cluster")
-          ? 2
-          : 1
-      )
-      .attr("fill", "none")
-      .attr("marker-end", "url(#arrow)")
-      .on("mouseover", function() {
-        d3.select(this)
-          .transition()
-          .duration(200)
-          .attr("stroke-opacity", 0.8)
-          .attr("stroke-width", d => 
-            d.source.id?.includes("Cluster") && d.target.id?.includes("Cluster")
-              ? 3
-              : 2
-          );
-      })
-      .on("mouseout", function() {
-        d3.select(this)
-          .transition()
-          .duration(200)
-          .attr("stroke-opacity", 0.15)
-          .attr("stroke-width", d => 
-            d.source.id?.includes("Cluster") && d.target.id?.includes("Cluster")
-              ? 2
-              : 1
-          );
+    function dragged(event) {
+      event.subject.fx = event.x;
+      event.subject.fy = event.y;
+    }
+
+    function dragended(event) {
+      if (!event.active) simulation.alphaTarget(0);
+      if (!event.subject.isCluster) {
+        event.subject.fx = null;
+        event.subject.fy = null;
+      }
+    }
+
+    // Update positions on simulation tick with stronger containment
+    simulation.on("tick", () => {
+      // Keep nodes within their cluster boundaries
+      nodes.forEach(d => {
+        if (!d.isCluster && d.type !== "Not Found") {
+          const cluster = clusters[d.cluster];
+          if (cluster) {
+            const dx = d.x - cluster.x;
+            const dy = d.y - cluster.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const maxRadius = cluster.radius - 30;
+            
+            if (dist > maxRadius) {
+              const angle = Math.atan2(dy, dx);
+              d.x = cluster.x + maxRadius * Math.cos(angle);
+              d.y = cluster.y + maxRadius * Math.sin(angle);
+            }
+          }
+        }
       });
 
-    // Simulation update
-    simulation.on("tick", () => {
-      // Update link paths
-      link.attr("d", linkArc);
-      linkHitArea.attr("d", linkArc);
+      // Update link positions
+      link.attr("d", d => {
+        const source = typeof d.source === 'string' ? nodes.find(n => n.id === d.source) : d.source;
+        const target = typeof d.target === 'string' ? nodes.find(n => n.id === d.target) : d.target;
+        
+        if (!source || !target) return "";
+
+        // Use straight lines for intra-cluster connections and curved for inter-cluster
+        if (source.cluster === target.cluster || (source.isCluster && target.isCluster)) {
+          return `M${source.x},${source.y}L${target.x},${target.y}`;
+        } else {
+          const dx = target.x - source.x;
+          const dy = target.y - source.y;
+          const dr = Math.sqrt(dx * dx + dy * dy) * 2;
+          return `M${source.x},${source.y}A${dr},${dr} 0 0,1 ${target.x},${target.y}`;
+        }
+      });
+
+      // Update hit areas
+      linkHitArea.attr("d", d => {
+        const source = typeof d.source === 'string' ? nodes.find(n => n.id === d.source) : d.source;
+        const target = typeof d.target === 'string' ? nodes.find(n => n.id === d.target) : d.target;
+        
+        if (!source || !target) return "";
+
+        if (source.cluster === target.cluster || (source.isCluster && target.isCluster)) {
+          return `M${source.x},${source.y}L${target.x},${target.y}`;
+        } else {
+          const dx = target.x - source.x;
+          const dy = target.y - source.y;
+          const dr = Math.sqrt(dx * dx + dy * dy) * 2;
+          return `M${source.x},${source.y}A${dr},${dr} 0 0,1 ${target.x},${target.y}`;
+        }
+      });
 
       // Update node positions
-      nodeGroup.attr("transform", (d) => `translate(${d.x},${d.y})`);
+      node.attr("transform", d => `translate(${d.x},${d.y})`);
     });
 
-    unknownSimulation.on("tick", () => {
-      // Update node positions for unknown nodes
-      unknownNodes.forEach(node => {
-        node.x = Math.round(node.x / 150) * 150;
-        node.y = Math.round(node.y / 150) * 150;
-      });
-    });
-
-    // Add double-click behavior for centering view
-    nodeHitArea.on("dblclick", (event, d) => {
-      event.stopPropagation();
-
-      const transform = d3.zoomTransform(svg.node());
-      const scale = transform.k;
-      const x = width / 2 - d.x * scale;
-      const y = height / 2 - d.y * scale;
-
-      svg
-        .transition()
-        .duration(750)
-        .call(zoom.transform, d3.zoomIdentity.translate(x, y).scale(scale));
-    });
-
-    // Add double-click on background to reset zoom
-    svg.on("dblclick", (event) => {
-      svg.transition().duration(750).call(zoom.transform, d3.zoomIdentity);
-    });
-
-    // Add legend
-    const legend = svg
-      .append("g")
-      .attr("class", "legend")
-      .attr("transform", `translate(20, 20)`);
-
-    // Add status legend
-    const statusLegend = legend
-      .append("g")
-      .attr("transform", "translate(0, 0)");
-
-    statusLegend
-      .append("text")
-      .attr("x", 0)
-      .attr("y", 0)
-      .attr("fill", "white")
-      .text("Status:");
-
-    const statusItems = [
-      { label: "Active", color: "#00ff00" },
-      { label: "Inactive", color: "#ff0000" },
-    ];
-
-    statusItems.forEach((item, i) => {
-      const g = statusLegend
-        .append("g")
-        .attr("transform", `translate(0, ${i * 25 + 15})`);
-
-      g.append("rect")
-        .attr("width", 12)
-        .attr("height", 12)
-        .attr("fill", item.color);
-
-      g.append("text")
-        .attr("x", 20)
-        .attr("y", 10)
-        .attr("fill", "white")
-        .text(item.label);
-    });
-
-    // Add node type legend
-    const typeLegend = legend.append("g").attr("transform", "translate(0, 80)");
-
-    typeLegend
-      .append("text")
-      .attr("x", 0)
-      .attr("y", 0)
-      .attr("fill", "white")
-      .text("Node Types:");
-
-    const nodeTypes = [
-      { type: "IT", label: "IT", icon: CiDesktop },
-      { type: "Network", label: "Network", icon: Router },
-      { type: "OT", label: "OT", icon: CircuitBoard },
-    ];
-
-    nodeTypes.forEach((item, i) => {
-      const g = typeLegend
-        .append("g")
-        .attr("transform", `translate(0, ${i * 25 + 15})`);
-
-      const icon = document.createElement("div");
-      icon.innerHTML = ReactDOMServer.renderToStaticMarkup(
-        <item.icon width={16} height={16} stroke="white" strokeWidth={1} />
-      );
-
-      g.append("foreignObject")
-        .attr("width", 16)
-        .attr("height", 16)
-        .style("pointer-events", "none")
-        .append("xhtml:div")
-        .style("width", "100%")
-        .style("height", "100%")
-        .style("display", "flex")
-        .style("align-items", "center")
-        .style("justify-content", "center")
-        .node()
-        .appendChild(icon.firstChild);
-
-      g.append("text")
-        .attr("x", 24)
-        .attr("y", 12)
-        .attr("fill", "white")
-        .text(item.label);
-    });
-
-    // Add instructions text
-    const instructions = svg
-      .append("g")
-      .attr("class", "instructions")
-      .attr("transform", `translate(20, ${height - 60})`);
-
-    instructions
-      .append("text")
-      .attr("fill", "white")
-      .attr("opacity", 0.7)
-      .selectAll("tspan")
-      .data([
-        "Instructions:",
-        "• Hover over nodes to see details",
-        "• Double-click node to center view",
-        "• Double-click background to reset view",
-        "• Drag nodes to reposition",
-      ])
-      .join("tspan")
-      .attr("x", 0)
-      .attr("dy", (d, i) => (i === 0 ? 0 : "1.2em"))
-      .text((d) => d);
-
-    // Cleanup function
+    // Cleanup
     return () => {
       simulation.stop();
-      unknownSimulation.stop();
       d3.selectAll(".graph-tooltip").remove();
-      d3.selectAll(".link-tooltip").remove();
       document.head.removeChild(styleSheet);
     };
   }, [data]);
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+    <div style={{ width: "100%", height: "100%" }}>
       <svg ref={svgRef}></svg>
     </div>
   );
