@@ -4,6 +4,9 @@ import { Network, Server, Router, Monitor, Cpu, Laptop, Database } from 'lucide-
 import ReactDOMServer from "react-dom/server";
 import { CiServer, CiRouter, CiDesktop } from "react-icons/ci";
 
+// Add after imports
+const sanitizeId = (str) => str.replace(/[^a-zA-Z0-9]/g, '_');
+
 const styles = `
   @keyframes blink {
     0% { opacity: 0.4; }
@@ -34,6 +37,38 @@ const styles = `
   }
   .node-not-found {
     opacity: 0.5;
+  }
+  .graph-tooltip {
+    position: fixed;
+    background-color: rgba(0, 0, 0, 0.9);
+    color: white;
+    padding: 12px;
+    border-radius: 6px;
+    font-size: 14px;
+    pointer-events: none;
+    z-index: 1000;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    max-width: 300px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  .graph-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: hidden;
+    z-index: 50;
+    pointer-events: all;
+  }
+  .graph-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 40;
   }
 `;
 
@@ -175,23 +210,61 @@ const GraphComponent = ({ data }) => {
       });
     });
 
-    // SVG setup
+    // SVG setup with improved zoom handling
     const svg = d3.select(svgRef.current)
-      .attr("width", width)
-      .attr("height", height)
-      .style("background", "#111");
+      .attr("width", "100%")
+      .attr("height", "100%")
+      .style("background", "#111")
+      .classed("graph-svg", true);
 
     svg.selectAll("*").remove();
 
-    // Add zoom behavior
+    // Enhanced zoom behavior
     const zoom = d3.zoom()
-      .scaleExtent([0.5, 2])
+      .scaleExtent([0.2, 4])
       .on("zoom", (event) => {
         container.attr("transform", event.transform);
       });
 
-    svg.call(zoom);
+    svg.call(zoom)
+      .on("dblclick.zoom", null); // Disable double-click zoom
+
     const container = svg.append("g");
+
+    // Add zoom in and zoom out buttons
+    const zoomIn = svg.append("g")
+      .attr("class", "zoom-button")
+      .attr("transform", "translate(20, 20)")
+      .on("click", () => zoom.scaleBy(svg.transition().duration(750), 1.3));
+
+    zoomIn.append("rect")
+      .attr("width", 30)
+      .attr("height", 30)
+      .attr("rx", 5);
+
+    zoomIn.append("text")
+      .attr("x", 15)
+      .attr("y", 20)
+      .attr("text-anchor", "middle")
+      .attr("fill", "white")
+      .text("+");
+
+    const zoomOut = svg.append("g")
+      .attr("class", "zoom-button")
+      .attr("transform", "translate(20, 60)")
+      .on("click", () => zoom.scaleBy(svg.transition().duration(750), 1 / 1.3));
+
+    zoomOut.append("rect")
+      .attr("width", 30)
+      .attr("height", 30)
+      .attr("rx", 5);
+
+    zoomOut.append("text")
+      .attr("x", 15)
+      .attr("y", 20)
+      .attr("text-anchor", "middle")
+      .attr("fill", "white")
+      .text("-");
 
     // Add cluster boundaries
     const clusterBoundaries = container.selectAll(".cluster-boundary")
@@ -205,18 +278,29 @@ const GraphComponent = ({ data }) => {
       .style("stroke-dasharray", "5,5")
       .style("fill", "none");
 
-    // Create tooltips
+    // Enhanced tooltip
     const tooltip = d3.select("body")
       .append("div")
       .attr("class", "graph-tooltip")
-      .style("position", "absolute")
-      .style("background-color", "rgba(0, 0, 0, 0.8)")
-      .style("color", "white")
-      .style("padding", "10px")
-      .style("border-radius", "5px")
-      .style("font-size", "12px")
-      .style("pointer-events", "none")
       .style("opacity", 0);
+
+    // Improved getOverlappingLinks function
+    function getOverlappingLinks(x, y) {
+      const threshold = 5;
+      return links.filter(linkData => {
+        const linkElement = d3.select(`path.link[id="${linkData.id}"]`).node();
+        if (linkElement) {
+          const pathLength = linkElement.getTotalLength();
+          for (let i = 0; i < pathLength; i += 5) {
+            const p = linkElement.getPointAtLength(i);
+            if (Math.abs(p.x - x) < threshold && Math.abs(p.y - y) < threshold) {
+              return true;
+            }
+          }
+        }
+        return false;
+      });
+    }
 
     // Draw links
     const link = container.append("g")
@@ -224,6 +308,8 @@ const GraphComponent = ({ data }) => {
       .data(links)
       .join("path")
       .attr("class", "link")
+      // Update the link ID attribute
+      .attr("id", d => `link-${sanitizeId(d.source.id || d.source)}-${sanitizeId(d.target.id || d.target)}`)
       .attr("stroke", d => {
         if (d.type === 'it') return "#ffffff";
         if (d.type === 'network') return "#3b82f6";
@@ -245,35 +331,58 @@ const GraphComponent = ({ data }) => {
       .attr("stroke-width", 10)
       .attr("fill", "none")
       .on("mouseover", (event, d) => {
-        // Highlight the corresponding visible link
-        link.filter(l => l === d)
+        // Highlight the corresponding link
+        // Update the selector in mouseover
+        d3.select(`#link-${sanitizeId(d.source.id || d.source)}-${sanitizeId(d.target.id || d.target)}`)
           .attr("stroke-opacity", 0.8)
           .attr("stroke-width", d.type === 'inter-cluster' ? 4 : 2);
 
-        // Show tooltip
-        const sourceNode = nodeMap.get(d.source.id || d.source);
-        const targetNode = nodeMap.get(d.target.id || d.target);
-        
+        // Show tooltip with connection information
         tooltip.transition()
           .duration(200)
-          .style("opacity", 0.9);
-        
-        tooltip.html(`
-          <div style="padding: 8px;">
-            <strong>Connection:</strong><br/>
-            From: ${sourceNode?.Vendor || sourceNode?.label || sourceNode?.id || 'Unknown'}<br/>
-            To: ${targetNode?.Vendor || targetNode?.label || targetNode?.id || 'Unknown'}<br/>
-            ${sourceNode?.Protocol ? `Protocol: ${sourceNode.Protocol}` : ''}
+          .style("opacity", 1);
+
+        const sourceNode = nodeMap.get(typeof d.source === 'string' ? d.source : d.source.id);
+        const targetNode = nodeMap.get(typeof d.target === 'string' ? d.target : d.target.id);
+
+        const content = `
+          <div style="margin-bottom: 8px;">
+            <strong style="font-size: 16px;">Connection Details</strong>
           </div>
-        `)
-          .style("left", (event.pageX + 10) + "px")
-          .style("top", (event.pageY - 28) + "px");
+          <div style="margin-bottom: 4px;">
+            <strong>From:</strong> ${sourceNode?.Vendor || sourceNode?.label || 'Unknown'}
+          </div>
+          <div style="margin-bottom: 4px;">
+            <strong>To:</strong> ${targetNode?.Vendor || targetNode?.label || 'Unknown'}
+          </div>
+          ${sourceNode?.Protocol ? `
+          <div style="margin-bottom: 4px;">
+            <strong>Protocol:</strong> ${sourceNode.Protocol}
+          </div>
+          ` : ''}
+          ${sourceNode?.Port ? `
+          <div style="margin-bottom: 4px;">
+            <strong>Port:</strong> ${sourceNode.Port}
+          </div>
+          ` : ''}
+          <div style="margin-bottom: 4px;">
+            <strong>Type:</strong> ${d.type.charAt(0).toUpperCase() + d.type.slice(1)} Connection
+          </div>
+        `;
+
+        tooltip.html(content)
+          .style("left", (event.pageX + 15) + "px")
+          .style("top", (event.pageY - 15) + "px");
       })
-      .on("mouseout", (event, d) => {
+      .on("mousemove", (event) => {
+        tooltip
+          .style("left", (event.pageX + 15) + "px")
+          .style("top", (event.pageY - 15) + "px");
+      })
+      .on("mouseout", () => {
         // Reset link appearance
-        link.filter(l => l === d)
-          .attr("stroke-opacity", d.type === 'inter-cluster' ? 0.4 : 0.2)
-          .attr("stroke-width", d.type === 'inter-cluster' ? 3 : 1.5);
+        link.attr("stroke-opacity", d => d.type === 'inter-cluster' ? 0.4 : 0.2)
+          .attr("stroke-width", d => d.type === 'inter-cluster' ? 3 : 1.5);
 
         // Hide tooltip
         tooltip.transition()
@@ -350,44 +459,98 @@ const GraphComponent = ({ data }) => {
       .attr("cy", 8)
       .attr("fill", d => d.status === "true" ? "#4CAF50" : "#F44336");
 
-    // Node tooltip
+    // Node tooltip with improved visibility
     node.on("mouseover", (event, d) => {
       if (!d.isCluster) {
         tooltip.transition()
           .duration(200)
-          .style("opacity", .9);
-        tooltip.html(`
-          <strong>${d.Vendor || "Unknown Device"}</strong><br/>
-          MAC: ${d.MAC}<br/>
-          IP: ${d.IP || "N/A"}<br/>
-          Type: ${d.type}<br/>
-          Status: ${d.status === "true" ? "Active" : "Inactive"}<br/>
-          ${d.Protocol ? `Protocol: ${d.Protocol}<br/>` : ''}
-          ${d.Port ? `Port: ${d.Port}` : ''}
-        `)
-          .style("left", (event.pageX) + "px")
-          .style("top", (event.pageY - 28) + "px");
+          .style("opacity", 1);
+        
+        const content = `
+          <div style="margin-bottom: 8px;">
+            <strong style="font-size: 16px;">${d.Vendor || "Unknown Device"}</strong>
+          </div>
+          <div style="margin-bottom: 4px;">
+            <strong>MAC:</strong> ${d.MAC}
+          </div>
+          <div style="margin-bottom: 4px;">
+            <strong>IP:</strong> ${d.IP || "N/A"}
+          </div>
+          <div style="margin-bottom: 4px;">
+            <strong>Type:</strong> ${d.type}
+          </div>
+          <div style="margin-bottom: 4px;">
+            <strong>Status:</strong> 
+            <span style="color: ${d.status === "true" ? "#4CAF50" : "#F44336"}">
+              ${d.status === "true" ? "Active" : "Inactive"}
+            </span>
+          </div>
+          ${d.Protocol ? `<div style="margin-bottom: 4px;"><strong>Protocol:</strong> ${d.Protocol}</div>` : ''}
+          ${d.Port ? `<div><strong>Port:</strong> ${d.Port}</div>` : ''}
+        `;
+
+        tooltip.html(content)
+          .style("left", (event.pageX + 15) + "px")
+          .style("top", (event.pageY - 15) + "px");
       }
     })
-      .on("mouseout", () => {
-        tooltip.transition()
-          .duration(500)
-          .style("opacity", 0);
-      });
+    .on("mousemove", (event) => {
+      tooltip
+        .style("left", (event.pageX + 15) + "px")
+        .style("top", (event.pageY - 15) + "px");
+    })
+    .on("mouseout", () => {
+      tooltip.transition()
+        .duration(500)
+        .style("opacity", 0);
+    });
+
+    // Mouse wheel zoom handler
+    svg.on("wheel", (event) => {
+      event.preventDefault();
+      const delta = event.deltaY;
+      const scaleFactor = delta > 0 ? 0.9 : 1.1;
+      
+      const [mouseX, mouseY] = d3.pointer(event);
+      const transform = d3.zoomTransform(svg.node());
+      
+      zoom.scaleBy(svg.transition().duration(200), scaleFactor);
+    });
+
+    // Double click to focus on node or reset
+    node.on("dblclick", (event, d) => {
+      event.stopPropagation();
+      const scale = 2;
+      const [x, y] = d3.pointer(event, container.node());
+      
+      svg.transition().duration(750).call(
+        zoom.transform,
+        d3.zoomIdentity
+          .translate(width / 2 - scale * x, height / 2 - scale * y)
+          .scale(scale)
+      );
+    });
+
+    // Double click on background to reset view
+    svg.on("dblclick", () => {
+      svg.transition().duration(750).call(
+        zoom.transform,
+        d3.zoomIdentity
+      );
+    });
 
     // Force simulation with stronger containment and increased node distance
     const simulation = d3.forceSimulation(nodes)
       .force("link", d3.forceLink(links)
         .id(d => d.id)
         .distance(d => {
-          if (d.source.isCluster && d.target.isCluster) return 400; // Increased distance for inter-cluster links
-          if (d.source.isCluster || d.target.isCluster) return 150;
-          if (d.source.type === "Not Found" || d.target.type === "Not Found") return 200;
-          return 80; // Increased distance between regular nodes
+          if (d.source.isCluster && d.target.isCluster) return 400;
+          if (d.source.isCluster || d.target.isCluster) return 200; // Increased from 150
+          return 120; // Increased from 80 for better node separation
         })
       )
-      .force("charge", d3.forceManyBody().strength(d => d.isCluster ? -1000 : -200))
-      .force("collision", d3.forceCollide().radius(d => d.isCluster ? 80 : 30))
+      .force("charge", d3.forceManyBody().strength(d => d.isCluster ? -1000 : -300)) // Increased repulsion
+      .force("collision", d3.forceCollide().radius(d => d.isCluster ? 80 : 40)) // Increased collision radius
       .force("x", d3.forceX(d => {
         if (d.type === "Not Found") return width * 0.9;
         const cluster = clusters[d.cluster];
@@ -419,6 +582,7 @@ const GraphComponent = ({ data }) => {
       }
     }
 
+
     // Update positions on simulation tick with stronger containment
     simulation.on("tick", () => {
       // Keep nodes within their cluster boundaries
@@ -430,7 +594,7 @@ const GraphComponent = ({ data }) => {
             const dy = d.y - cluster.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
             const maxRadius = cluster.radius - 30;
-            
+
             if (dist > maxRadius) {
               const angle = Math.atan2(dy, dx);
               d.x = cluster.x + maxRadius * Math.cos(angle);
@@ -444,7 +608,7 @@ const GraphComponent = ({ data }) => {
       link.attr("d", d => {
         const source = typeof d.source === 'string' ? nodes.find(n => n.id === d.source) : d.source;
         const target = typeof d.target === 'string' ? nodes.find(n => n.id === d.target) : d.target;
-        
+
         if (!source || !target) return "";
 
         // Use straight lines for intra-cluster connections and curved for inter-cluster
@@ -462,7 +626,7 @@ const GraphComponent = ({ data }) => {
       linkHitArea.attr("d", d => {
         const source = typeof d.source === 'string' ? nodes.find(n => n.id === d.source) : d.source;
         const target = typeof d.target === 'string' ? nodes.find(n => n.id === d.target) : d.target;
-        
+
         if (!source || !target) return "";
 
         if (source.cluster === target.cluster || (source.isCluster && target.isCluster)) {
@@ -488,9 +652,12 @@ const GraphComponent = ({ data }) => {
   }, [data]);
 
   return (
-    <div style={{ width: "100%", height: "100%" }}>
-      <svg ref={svgRef}></svg>
-    </div>
+    <>
+      <div className="graph-overlay" />
+      <div className="graph-container">
+        <svg ref={svgRef}></svg>
+      </div>
+    </>
   );
 };
 
