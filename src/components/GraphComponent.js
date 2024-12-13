@@ -1,11 +1,18 @@
-import React, { useEffect, useRef } from "react";
+"use client"
+
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import * as d3 from "d3";
-import { Network, Server, Router, Monitor, Cpu, Laptop, Database } from 'lucide-react';
+import { Network, Server, Router, Monitor, Cpu, Laptop, Database, X } from 'lucide-react';
 import ReactDOMServer from "react-dom/server";
 import { CiServer, CiRouter, CiDesktop } from "react-icons/ci";
 
-// Add after imports
-const sanitizeId = (str) => str.replace(/[^a-zA-Z0-9]/g, '_');
+const sanitizeId = (str) => {
+  if (typeof str !== 'string') {
+    console.warn(`sanitizeId received non-string value: ${str}`);
+    return String(str);
+  }
+  return str.replace(/[^a-zA-Z0-9]/g, '_');
+};
 
 const styles = `
   @keyframes blink {
@@ -70,33 +77,108 @@ const styles = `
     background: rgba(0, 0, 0, 0.85);
     z-index: 40;
   }
+  .search-container {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+  }
+  .search-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .search-input {
+    padding: 8px 32px 8px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    width: 200px;
+    margin-bottom: 5px;
+  }
+  .search-clear {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+    color: rgba(255, 255, 255, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .search-clear:hover {
+    color: white;
+  }
+  .search-dropdown {
+    background-color: rgba(0, 0, 0, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+    max-height: 150px;
+    overflow-y: auto;
+  }
+  .search-dropdown-item {
+    padding: 8px;
+    color: white;
+    cursor: pointer;
+  }
+  .search-dropdown-item:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+  .node.highlighted {
+    stroke: #ffff00;
+    stroke-width: 3px;
+  }
+  .node.connected {
+    stroke: #ffff00;
+    stroke-width: 2px;
+  }
+  .node.faded {
+    opacity: 0.2;
+    pointer-events: none;
+  }
+  .link.faded {
+    opacity: 0.1;
+    pointer-events: none;
+  }
+  .link.highlighted {
+    stroke: #ffff00 !important;
+    stroke-opacity: 0.8 !important;
+    stroke-width: 2px !important;
+  }
+  .link.connected {
+    stroke: #ffff00 !important;
+    stroke-opacity: 0.4 !important;
+    stroke-width: 1.5px !important;
+  }
 `;
 
 const GraphComponent = ({ data }) => {
   const svgRef = useRef();
+  const [searchTerm, setSearchTerm] = useState("");
+  const [selectedNode, setSelectedNode] = useState(null);
+  const [suggestions, setSuggestions] = useState([]);
 
-  useEffect(() => {
-    const styleSheet = document.createElement("style");
-    styleSheet.innerText = styles;
-    document.head.appendChild(styleSheet);
-
+  const nodes = useMemo(() => {
     if (!data || !Array.isArray(data) || !data[0].mac_data) {
       console.error('Invalid data format');
-      return;
+      return [];
     }
 
-    const width = 1600;
-    const height = 1200;
-    const verticalSpacing = height / 3;
-
-    // Define clusters with increased spacing
+    const nodesArray = [];
     const clusters = {
       IT: {
         id: "IT_Cluster",
         label: "IT",
         color: "#ffffff",
-        x: width * 0.25,
-        y: height * 0.3,
+        x: 400,
+        y: 300,
         radius: 250,
         icon: Laptop,
         nodeIcon: Laptop
@@ -105,8 +187,8 @@ const GraphComponent = ({ data }) => {
         id: "Network_Cluster",
         label: "Network",
         color: "#3b82f6",
-        x: width * 0.75,
-        y: height * 0.3,
+        x: 1200,
+        y: 300,
         radius: 250,
         icon: Router,
         nodeIcon: Router
@@ -115,28 +197,22 @@ const GraphComponent = ({ data }) => {
         id: "OT_Cluster",
         label: "OT",
         color: "#f97316",
-        x: width * 0.5,
-        y: height * 0.7,
+        x: 800,
+        y: 900,
         radius: 250,
         icon: Cpu,
         nodeIcon: Cpu
       },
     };
 
-    const nodes = [];
-    const links = [];
-    const nodeMap = new Map();
-
     // Add cluster center nodes
     Object.values(clusters).forEach((cluster) => {
-      const clusterNode = {
+      nodesArray.push({
         ...cluster,
         fx: cluster.x,
         fy: cluster.y,
         isCluster: true,
-      };
-      nodes.push(clusterNode);
-      nodeMap.set(cluster.id, clusterNode);
+      });
     });
 
     // Process device nodes
@@ -145,7 +221,7 @@ const GraphComponent = ({ data }) => {
       const devices = category[Object.keys(category)[0]];
 
       devices.forEach((device) => {
-        const deviceNode = {
+        nodesArray.push({
           id: device.MAC,
           IP: Array.isArray(device.IP) ? device.IP.join(", ") : device.IP,
           MAC: device.MAC,
@@ -155,23 +231,37 @@ const GraphComponent = ({ data }) => {
           status: device.status,
           type: deviceType,
           cluster: deviceType,
-        };
+        });
+      });
+    });
 
-        nodeMap.set(device.MAC, deviceNode);
-        nodes.push(deviceNode);
+    return nodesArray;
+  }, [data]);
 
-        // Add link to cluster center
-        links.push({
+  const links = useMemo(() => {
+    if (!data || !Array.isArray(data) || !data[0].mac_data) {
+      return [];
+    }
+
+    const linksArray = [];
+    const nodeMap = new Map(nodes.map(node => [node.id, node]));
+
+    // Add links to cluster centers and between devices
+    data[0].mac_data.forEach((category) => {
+      const deviceType = Object.keys(category)[0].split(" ")[0];
+      const devices = category[Object.keys(category)[0]];
+
+      devices.forEach((device) => {
+        linksArray.push({
           source: device.MAC,
           target: `${deviceType}_Cluster`,
           type: deviceType.toLowerCase(),
         });
 
-        // Create links based on device connections
         if (Array.isArray(device[device.MAC])) {
           device[device.MAC].forEach((connectedMAC) => {
             if (connectedMAC !== "00:00:00:00:00:00") {
-              links.push({
+              linksArray.push({
                 source: device.MAC,
                 target: connectedMAC,
                 type: deviceType.toLowerCase(),
@@ -182,35 +272,33 @@ const GraphComponent = ({ data }) => {
       });
     });
 
-    // Add nodes for MACs that are not found in the original data
-    links.forEach((link) => {
-      ['source', 'target'].forEach((endpoint) => {
-        if (typeof link[endpoint] === 'string' && !nodeMap.has(link[endpoint])) {
-          const notFoundNode = {
-            id: link[endpoint],
-            MAC: link[endpoint],
-            Vendor: "Unknown",
-            type: "Not Found",
-            cluster: "Not Found",
-            status: "false",
-          };
-          nodeMap.set(link[endpoint], notFoundNode);
-          nodes.push(notFoundNode);
-        }
-      });
-    });
-
     // Add inter-cluster links
-    Object.values(clusters).forEach((source, index, array) => {
-      const target = array[(index + 1) % array.length];
-      links.push({
-        source: source.id,
-        target: target.id,
+    const clusters = ["IT_Cluster", "Network_Cluster", "OT_Cluster"];
+    clusters.forEach((source, index) => {
+      const target = clusters[(index + 1) % clusters.length];
+      linksArray.push({
+        source,
+        target,
         type: 'inter-cluster',
       });
     });
 
-    // SVG setup with improved zoom handling
+    return linksArray;
+  }, [data, nodes]);
+
+  const validateLinks = (links, nodes) => {
+    const nodeIds = new Set(nodes.map(n => n.id));
+    return links.filter(link => 
+      nodeIds.has(typeof link.source === 'object' ? link.source.id : link.source) &&
+      nodeIds.has(typeof link.target === 'object' ? link.target.id : link.target)
+    );
+  };
+
+  useEffect(() => {
+    const styleSheet = document.createElement("style");
+    styleSheet.innerText = styles;
+    document.head.appendChild(styleSheet);
+
     const svg = d3.select(svgRef.current)
       .attr("width", "100%")
       .attr("height", "100%")
@@ -219,7 +307,9 @@ const GraphComponent = ({ data }) => {
 
     svg.selectAll("*").remove();
 
-    // Enhanced zoom behavior
+    const width = 1600;
+    const height = 1200;
+
     const zoom = d3.zoom()
       .scaleExtent([0.2, 4])
       .on("zoom", (event) => {
@@ -227,48 +317,13 @@ const GraphComponent = ({ data }) => {
       });
 
     svg.call(zoom)
-      .on("dblclick.zoom", null); // Disable double-click zoom
+      .on("dblclick.zoom", null);
 
     const container = svg.append("g");
 
-    // Add zoom in and zoom out buttons
-    const zoomIn = svg.append("g")
-      .attr("class", "zoom-button")
-      .attr("transform", "translate(20, 20)")
-      .on("click", () => zoom.scaleBy(svg.transition().duration(750), 1.3));
-
-    zoomIn.append("rect")
-      .attr("width", 30)
-      .attr("height", 30)
-      .attr("rx", 5);
-
-    zoomIn.append("text")
-      .attr("x", 15)
-      .attr("y", 20)
-      .attr("text-anchor", "middle")
-      .attr("fill", "white")
-      .text("+");
-
-    const zoomOut = svg.append("g")
-      .attr("class", "zoom-button")
-      .attr("transform", "translate(20, 60)")
-      .on("click", () => zoom.scaleBy(svg.transition().duration(750), 1 / 1.3));
-
-    zoomOut.append("rect")
-      .attr("width", 30)
-      .attr("height", 30)
-      .attr("rx", 5);
-
-    zoomOut.append("text")
-      .attr("x", 15)
-      .attr("y", 20)
-      .attr("text-anchor", "middle")
-      .attr("fill", "white")
-      .text("-");
-
     // Add cluster boundaries
     const clusterBoundaries = container.selectAll(".cluster-boundary")
-      .data(Object.values(clusters))
+      .data(nodes.filter(d => d.isCluster))
       .join("circle")
       .attr("class", d => `cluster-boundary cluster-${d.id.toLowerCase()}`)
       .attr("cx", d => d.x)
@@ -284,32 +339,19 @@ const GraphComponent = ({ data }) => {
       .attr("class", "graph-tooltip")
       .style("opacity", 0);
 
-    // Improved getOverlappingLinks function
-    function getOverlappingLinks(x, y) {
-      const threshold = 5;
-      return links.filter(linkData => {
-        const linkElement = d3.select(`path.link[id="${linkData.id}"]`).node();
-        if (linkElement) {
-          const pathLength = linkElement.getTotalLength();
-          for (let i = 0; i < pathLength; i += 5) {
-            const p = linkElement.getPointAtLength(i);
-            if (Math.abs(p.x - x) < threshold && Math.abs(p.y - y) < threshold) {
-              return true;
-            }
-          }
-        }
-        return false;
-      });
+    const validLinks = validateLinks(links, nodes);
+    const invalidLinks = links.filter(link => !validLinks.includes(link));
+    if (invalidLinks.length > 0) {
+      console.warn('Invalid links found:', invalidLinks);
     }
 
     // Draw links
     const link = container.append("g")
       .selectAll("path")
-      .data(links)
+      .data(validLinks)
       .join("path")
       .attr("class", "link")
-      // Update the link ID attribute
-      .attr("id", d => `link-${sanitizeId(d.source.id || d.source)}-${sanitizeId(d.target.id || d.target)}`)
+      .attr("id", d => `link-${sanitizeId(d.source)}-${sanitizeId(d.target)}`)
       .attr("stroke", d => {
         if (d.type === 'it') return "#ffffff";
         if (d.type === 'network') return "#3b82f6";
@@ -320,75 +362,6 @@ const GraphComponent = ({ data }) => {
       .attr("stroke-opacity", d => d.type === 'inter-cluster' ? 0.4 : 0.2)
       .attr("stroke-width", d => d.type === 'inter-cluster' ? 3 : 1.5)
       .attr("fill", "none");
-
-    // Add invisible wider path for better hover detection
-    const linkHitArea = container.append("g")
-      .selectAll("path")
-      .data(links)
-      .join("path")
-      .attr("class", "link-hit-area")
-      .attr("stroke", "transparent")
-      .attr("stroke-width", 10)
-      .attr("fill", "none")
-      .on("mouseover", (event, d) => {
-        // Highlight the corresponding link
-        // Update the selector in mouseover
-        d3.select(`#link-${sanitizeId(d.source.id || d.source)}-${sanitizeId(d.target.id || d.target)}`)
-          .attr("stroke-opacity", 0.8)
-          .attr("stroke-width", d.type === 'inter-cluster' ? 4 : 2);
-
-        // Show tooltip with connection information
-        tooltip.transition()
-          .duration(200)
-          .style("opacity", 1);
-
-        const sourceNode = nodeMap.get(typeof d.source === 'string' ? d.source : d.source.id);
-        const targetNode = nodeMap.get(typeof d.target === 'string' ? d.target : d.target.id);
-
-        const content = `
-          <div style="margin-bottom: 8px;">
-            <strong style="font-size: 16px;">Connection Details</strong>
-          </div>
-          <div style="margin-bottom: 4px;">
-            <strong>From:</strong> ${sourceNode?.Vendor || sourceNode?.label || 'Unknown'}
-          </div>
-          <div style="margin-bottom: 4px;">
-            <strong>To:</strong> ${targetNode?.Vendor || targetNode?.label || 'Unknown'}
-          </div>
-          ${sourceNode?.Protocol ? `
-          <div style="margin-bottom: 4px;">
-            <strong>Protocol:</strong> ${sourceNode.Protocol}
-          </div>
-          ` : ''}
-          ${sourceNode?.Port ? `
-          <div style="margin-bottom: 4px;">
-            <strong>Port:</strong> ${sourceNode.Port}
-          </div>
-          ` : ''}
-          <div style="margin-bottom: 4px;">
-            <strong>Type:</strong> ${d.type.charAt(0).toUpperCase() + d.type.slice(1)} Connection
-          </div>
-        `;
-
-        tooltip.html(content)
-          .style("left", (event.pageX + 15) + "px")
-          .style("top", (event.pageY - 15) + "px");
-      })
-      .on("mousemove", (event) => {
-        tooltip
-          .style("left", (event.pageX + 15) + "px")
-          .style("top", (event.pageY - 15) + "px");
-      })
-      .on("mouseout", () => {
-        // Reset link appearance
-        link.attr("stroke-opacity", d => d.type === 'inter-cluster' ? 0.4 : 0.2)
-          .attr("stroke-width", d => d.type === 'inter-cluster' ? 3 : 1.5);
-
-        // Hide tooltip
-        tooltip.transition()
-          .duration(500)
-          .style("opacity", 0);
-      });
 
     // Draw nodes
     const node = container.append("g")
@@ -413,7 +386,7 @@ const GraphComponent = ({ data }) => {
 
     // Add icons for nodes
     node.each(function(d) {
-      const IconComponent = d.isCluster ? d.icon : (clusters[d.type]?.nodeIcon || Database);
+      const IconComponent = d.isCluster ? d.icon : (d.nodeIcon || Database);
       if (IconComponent) {
         const foreignObject = d3.select(this)
           .append("foreignObject")
@@ -459,7 +432,7 @@ const GraphComponent = ({ data }) => {
       .attr("cy", 8)
       .attr("fill", d => d.status === "true" ? "#4CAF50" : "#F44336");
 
-    // Node tooltip with improved visibility
+    // Node tooltip
     node.on("mouseover", (event, d) => {
       if (!d.isCluster) {
         tooltip.transition()
@@ -505,61 +478,22 @@ const GraphComponent = ({ data }) => {
         .style("opacity", 0);
     });
 
-    // Mouse wheel zoom handler
-    svg.on("wheel", (event) => {
-      event.preventDefault();
-      const delta = event.deltaY;
-      const scaleFactor = delta > 0 ? 0.9 : 1.1;
-      
-      const [mouseX, mouseY] = d3.pointer(event);
-      const transform = d3.zoomTransform(svg.node());
-      
-      zoom.scaleBy(svg.transition().duration(200), scaleFactor);
-    });
-
-    // Double click to focus on node or reset
-    node.on("dblclick", (event, d) => {
-      event.stopPropagation();
-      const scale = 2;
-      const [x, y] = d3.pointer(event, container.node());
-      
-      svg.transition().duration(750).call(
-        zoom.transform,
-        d3.zoomIdentity
-          .translate(width / 2 - scale * x, height / 2 - scale * y)
-          .scale(scale)
-      );
-    });
-
-    // Double click on background to reset view
-    svg.on("dblclick", () => {
-      svg.transition().duration(750).call(
-        zoom.transform,
-        d3.zoomIdentity
-      );
-    });
-
-    // Force simulation with stronger containment and increased node distance
+    // Force simulation
     const simulation = d3.forceSimulation(nodes)
-      .force("link", d3.forceLink(links)
-        .id(d => d.id)
-        .distance(d => {
-          if (d.source.isCluster && d.target.isCluster) return 400;
-          if (d.source.isCluster || d.target.isCluster) return 200; // Increased from 150
-          return 120; // Increased from 80 for better node separation
-        })
-      )
-      .force("charge", d3.forceManyBody().strength(d => d.isCluster ? -1000 : -300)) // Increased repulsion
-      .force("collision", d3.forceCollide().radius(d => d.isCluster ? 80 : 40)) // Increased collision radius
+      .force("link", d3.forceLink(validLinks).id(d => d.id).distance(d => {
+        if (d.source.isCluster && d.target.isCluster) return 400;
+        if (d.source.isCluster || d.target.isCluster) return 200;
+        return 120;
+      }))
+      .force("charge", d3.forceManyBody().strength(d => d.isCluster ? -1000 : -300))
+      .force("collision", d3.forceCollide().radius(d => d.isCluster ? 80 : 40))
       .force("x", d3.forceX(d => {
-        if (d.type === "Not Found") return width * 0.9;
-        const cluster = clusters[d.cluster];
-        return cluster ? cluster.x : width / 2;
+        if (d.type === "Not Found") return width * 0.95; // Position Not Found nodes far right
+        return d.fx || width / 2;
       }).strength(d => d.type === "Not Found" ? 1 : 0.5))
       .force("y", d3.forceY(d => {
-        if (d.type === "Not Found") return height * 0.9;
-        const cluster = clusters[d.cluster];
-        return cluster ? cluster.y : height / 2;
+        if (d.type === "Not Found") return height * 0.95; // Position Not Found nodes at bottom
+        return d.fy || height / 2;
       }).strength(d => d.type === "Not Found" ? 1 : 0.5));
 
     // Drag functions
@@ -582,13 +516,12 @@ const GraphComponent = ({ data }) => {
       }
     }
 
-
-    // Update positions on simulation tick with stronger containment
+    // Update positions on simulation tick
     simulation.on("tick", () => {
       // Keep nodes within their cluster boundaries
       nodes.forEach(d => {
         if (!d.isCluster && d.type !== "Not Found") {
-          const cluster = clusters[d.cluster];
+          const cluster = nodes.find(n => n.id === `${d.cluster}_Cluster`);
           if (cluster) {
             const dx = d.x - cluster.x;
             const dy = d.y - cluster.y;
@@ -611,24 +544,6 @@ const GraphComponent = ({ data }) => {
 
         if (!source || !target) return "";
 
-        // Use straight lines for intra-cluster connections and curved for inter-cluster
-        if (source.cluster === target.cluster || (source.isCluster && target.isCluster)) {
-          return `M${source.x},${source.y}L${target.x},${target.y}`;
-        } else {
-          const dx = target.x - source.x;
-          const dy = target.y - source.y;
-          const dr = Math.sqrt(dx * dx + dy * dy) * 2;
-          return `M${source.x},${source.y}A${dr},${dr} 0 0,1 ${target.x},${target.y}`;
-        }
-      });
-
-      // Update hit areas
-      linkHitArea.attr("d", d => {
-        const source = typeof d.source === 'string' ? nodes.find(n => n.id === d.source) : d.source;
-        const target = typeof d.target === 'string' ? nodes.find(n => n.id === d.target) : d.target;
-
-        if (!source || !target) return "";
-
         if (source.cluster === target.cluster || (source.isCluster && target.isCluster)) {
           return `M${source.x},${source.y}L${target.x},${target.y}`;
         } else {
@@ -643,16 +558,153 @@ const GraphComponent = ({ data }) => {
       node.attr("transform", d => `translate(${d.x},${d.y})`);
     });
 
+    // Search functionality
+    const updateSearch = () => {
+      if (!selectedNode) {
+        node.classed("highlighted", false).classed("connected", false).classed("faded", false);
+        link.classed("highlighted", false).classed("connected", false).classed("faded", false);
+        return;
+      }
+
+      const connectedNodeIds = new Set();
+      links.forEach(l => {
+        if (l.source.id === selectedNode.id || l.target.id === selectedNode.id) {
+          connectedNodeIds.add(l.source.id);
+          connectedNodeIds.add(l.target.id);
+        }
+      });
+
+      node.classed("highlighted", d => d.id === selectedNode.id)
+          .classed("connected", d => d.id !== selectedNode.id && connectedNodeIds.has(d.id))
+          .classed("faded", d => d.id !== selectedNode.id && !connectedNodeIds.has(d.id));
+
+      link.classed("highlighted", d => 
+        d.source.id === selectedNode.id || d.target.id === selectedNode.id
+      )
+      .classed("connected", d => 
+        (connectedNodeIds.has(d.source.id) && connectedNodeIds.has(d.target.id)) &&
+        (d.source.id !== selectedNode.id && d.target.id !== selectedNode.id)
+      )
+      .classed("faded", d => 
+        !(d.source.id === selectedNode.id || d.target.id === selectedNode.id) &&
+        !(connectedNodeIds.has(d.source.id) && connectedNodeIds.has(d.target.id))
+      );
+
+      // Zoom to fit highlighted and connected nodes
+      const relevantNodes = nodes.filter(d => d.id === selectedNode.id || connectedNodeIds.has(d.id));
+      const bounds = getBoundingBox(relevantNodes);
+      zoomToFit(bounds, width, height);
+    };
+
+    const getBoundingBox = (nodes) => {
+      const box = {
+        x1: Infinity,
+        y1: Infinity,
+        x2: -Infinity,
+        y2: -Infinity
+      };
+
+      nodes.forEach(d => {
+        box.x1 = Math.min(box.x1, d.x);
+        box.y1 = Math.min(box.y1, d.y);
+        box.x2 = Math.max(box.x2, d.x);
+        box.y2 = Math.max(box.y2, d.y);
+      });
+
+      return box;
+    };
+
+    const zoomToFit = (box, width, height) => {
+      const dx = box.x2 - box.x1;
+      const dy = box.y2 - box.y1;
+      const x = (box.x1 + box.x2) / 2;
+      const y = (box.y1 + box.y2) / 2;
+      const scale = 0.8 / Math.max(dx / width, dy / height);
+      const translate = [width / 2 - scale * x, height / 2 - scale * y];
+
+      svg.transition().duration(750).call(
+        zoom.transform,
+        d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale)
+      );
+    };
+
+    updateSearch();
+
     // Cleanup
     return () => {
       simulation.stop();
       d3.selectAll(".graph-tooltip").remove();
       document.head.removeChild(styleSheet);
     };
-  }, [data]);
+  }, [nodes, links, selectedNode]);
+
+  useEffect(() => {
+    if (searchTerm.trim() === "") {
+      setSuggestions([]);
+      setSelectedNode(null);
+      return;
+    }
+
+    const searchRegex = new RegExp(searchTerm, 'i');
+    const matchingNodes = nodes.filter(d => 
+      !d.isCluster && (searchRegex.test(d.Vendor) || searchRegex.test(d.MAC) || searchRegex.test(d.IP))
+    );
+
+    const newSuggestions = matchingNodes.map(node => ({
+      id: node.id,
+      label: `${node.Vendor} - ${node.type} (${node.MAC})`
+    }));
+
+    setSuggestions(newSuggestions);
+  }, [searchTerm, nodes]);
+
+  const handleSuggestionClick = (suggestion) => {
+    setSearchTerm(suggestion.label);
+    setSelectedNode(nodes.find(node => node.id === suggestion.id));
+    setSuggestions([]);
+  };
+
+  const clearSearch = () => {
+    setSearchTerm("");
+    setSelectedNode(null);
+    setSuggestions([]);
+  };
 
   return (
     <>
+      <div className="search-container">
+        <div className="search-input-wrapper">
+          <input
+            type="text"
+            placeholder="Search nodes..."
+            className="search-input"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+          {searchTerm && (
+            <button 
+              className="search-clear"
+              onClick={clearSearch}
+              aria-label="Clear search"
+            >
+              <X size={16} />
+            </button>
+          )}
+        </div>
+        {suggestions.length > 0 && (
+          <div className="search-dropdown">
+            {suggestions.map((suggestion) => (
+              <div
+                key={suggestion.id}
+                className="search-dropdown-item"
+                onClick={() => handleSuggestionClick(suggestion)}
+              >
+                {suggestion.label}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="graph-overlay" />
       <div className="graph-container">
         <svg ref={svgRef}></svg>
