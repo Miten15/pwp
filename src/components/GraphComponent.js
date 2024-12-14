@@ -133,11 +133,11 @@ const styles = `
   }
   .node.highlighted {
     stroke: #ffff00;
-    stroke-width: 3px;
+    stroke-width: 1px;
   }
   .node.connected {
     stroke: #ffff00;
-    stroke-width: 2px;
+    stroke-width: 0.2px;
   }
   .node.faded {
     opacity: 0.2;
@@ -351,7 +351,7 @@ const GraphComponent = ({ data }) => {
       .data(validLinks)
       .join("path")
       .attr("class", "link")
-      .attr("id", d => `link-${sanitizeId(d.source)}-${sanitizeId(d.target)}`)
+      .attr("id", d => `link-${sanitizeId(d.source.id || d.source)}-${sanitizeId(d.target.id || d.target)}`)
       .attr("stroke", d => {
         if (d.type === 'it') return "#ffffff";
         if (d.type === 'network') return "#3b82f6";
@@ -363,12 +363,80 @@ const GraphComponent = ({ data }) => {
       .attr("stroke-width", d => d.type === 'inter-cluster' ? 3 : 1.5)
       .attr("fill", "none");
 
+    // Add invisible wider path for better hover detection
+    const linkHitArea = container.append("g")
+      .selectAll("path")
+      .data(validLinks)
+      .join("path")
+      .attr("class", "link-hit-area")
+      .attr("stroke", "transparent")
+      .attr("stroke-width", 10)
+      .attr("fill", "none")
+      .on("mouseover", (event, d) => {
+        // Highlight the corresponding link
+        d3.select(`#link-${sanitizeId(d.source.id || d.source)}-${sanitizeId(d.target.id || d.target)}`)
+          .attr("stroke-opacity", 0.8)
+          .attr("stroke-width", d.type === 'inter-cluster' ? 4 : 2);
+
+        // Show tooltip with connection information
+        tooltip.transition()
+          .duration(200)
+          .style("opacity", 1);
+
+        const sourceNode = nodes.find(n => n.id === (d.source.id || d.source));
+        const targetNode = nodes.find(n => n.id === (d.target.id || d.target));
+
+        const content = `
+          <div style="margin-bottom: 8px;">
+            <strong style="font-size: 16px;">Connection Details</strong>
+          </div>
+          <div style="margin-bottom: 4px;">
+            <strong>From:</strong> ${sourceNode?.Vendor || sourceNode?.label || 'Unknown'}
+          </div>
+          <div style="margin-bottom: 4px;">
+            <strong>To:</strong> ${targetNode?.Vendor || targetNode?.label || 'Unknown'}
+          </div>
+          ${sourceNode?.Protocol ? `
+          <div style="margin-bottom: 4px;">
+            <strong>Protocol:</strong> ${sourceNode.Protocol}
+          </div>
+          ` : ''}
+          ${sourceNode?.Port ? `
+          <div style="margin-bottom: 4px;">
+            <strong>Port:</strong> ${sourceNode.Port}
+          </div>
+          ` : ''}
+          <div style="margin-bottom: 4px;">
+            <strong>Type:</strong> ${d.type.charAt(0).toUpperCase() + d.type.slice(1)} Connection
+          </div>
+        `;
+
+        tooltip.html(content)
+          .style("left", (event.pageX + 15) + "px")
+          .style("top", (event.pageY - 15) + "px");
+      })
+      .on("mousemove", (event) => {
+        tooltip
+          .style("left", (event.pageX + 15) + "px")
+          .style("top", (event.pageY - 15) + "px");
+      })
+      .on("mouseout", () => {
+        // Reset link appearance
+        link.attr("stroke-opacity", d => d.type === 'inter-cluster' ? 0.4 : 0.2)
+          .attr("stroke-width", d => d.type === 'inter-cluster' ? 3 : 1.5);
+
+        // Hide tooltip
+        tooltip.transition()
+          .duration(500)
+          .style("opacity", 0);
+      });
+
     // Draw nodes
     const node = container.append("g")
       .selectAll("g")
       .data(nodes)
       .join("g")
-      .attr("class", d => `node ${d.type === 'Not Found' ? 'node-not-found' : ''}`)
+      .attr("class", d => `node ${d.Vendor === 'Not Found' ? 'node-not-found' : ''}`)
       .call(d3.drag()
         .on("start", dragstarted)
         .on("drag", dragged)
@@ -408,7 +476,7 @@ const GraphComponent = ({ data }) => {
           <IconComponent 
             width={d.isCluster ? 24 : 16} 
             height={d.isCluster ? 24 : 16} 
-            stroke={d.type === "Not Found" ? "#999" : "white"} 
+            stroke={d.Vendor === "Not Found" ? "#999" : "white"} 
             strokeWidth={1.5} 
           />
         );
@@ -485,16 +553,12 @@ const GraphComponent = ({ data }) => {
         if (d.source.isCluster || d.target.isCluster) return 200;
         return 120;
       }))
-      .force("charge", d3.forceManyBody().strength(d => d.isCluster ? -1000 : -300))
-      .force("collision", d3.forceCollide().radius(d => d.isCluster ? 80 : 40))
-      .force("x", d3.forceX(d => {
-        if (d.type === "Not Found") return width * 0.95; // Position Not Found nodes far right
-        return d.fx || width / 2;
-      }).strength(d => d.type === "Not Found" ? 1 : 0.5))
-      .force("y", d3.forceY(d => {
-        if (d.type === "Not Found") return height * 0.95; // Position Not Found nodes at bottom
-        return d.fy || height / 2;
-      }).strength(d => d.type === "Not Found" ? 1 : 0.5));
+      .force("charge", d3.forceManyBody().strength(d => d.isCluster ? -2000 : -600))
+      .force("collision", d3.forceCollide().radius(d => d.isCluster ? 100 : 50))
+      .force("x", d3.forceX(width / 2).strength(0.1))
+      .force("y", d3.forceY(height / 2).strength(0.1))
+      .alphaDecay(0.01)
+      .velocityDecay(0.3);
 
     // Drag functions
     function dragstarted(event) {
@@ -518,9 +582,20 @@ const GraphComponent = ({ data }) => {
 
     // Update positions on simulation tick
     simulation.on("tick", () => {
-      // Keep nodes within their cluster boundaries
+      // Position "Not Found" nodes in a grid layout in the bottom-right corner
+      const notFoundNodes = nodes.filter(d => d.Vendor === "Not Found");
+      const gridSize = Math.ceil(Math.sqrt(notFoundNodes.length));
+      const cellSize = 50;
+      notFoundNodes.forEach((d, i) => {
+        const col = i % gridSize;
+        const row = Math.floor(i / gridSize);
+        d.x = width - (gridSize - col) * cellSize;
+        d.y = height - (gridSize - row) * cellSize;
+      });
+
+      // Keep other nodes within their cluster boundaries
       nodes.forEach(d => {
-        if (!d.isCluster && d.type !== "Not Found") {
+        if (!d.isCluster && d.Vendor !== "Not Found") {
           const cluster = nodes.find(n => n.id === `${d.cluster}_Cluster`);
           if (cluster) {
             const dx = d.x - cluster.x;
@@ -539,6 +614,23 @@ const GraphComponent = ({ data }) => {
 
       // Update link positions
       link.attr("d", d => {
+        const source = typeof d.source === 'string' ? nodes.find(n => n.id === d.source) : d.source;
+        const target = typeof d.target === 'string' ? nodes.find(n => n.id === d.target) : d.target;
+
+        if (!source || !target) return "";
+
+        if (source.cluster === target.cluster || (source.isCluster && target.isCluster)) {
+          return `M${source.x},${source.y}L${target.x},${target.y}`;
+        } else {
+          const dx = target.x - source.x;
+          const dy = target.y - source.y;
+          const dr = Math.sqrt(dx * dx + dy * dy) * 2;
+          return `M${source.x},${source.y}A${dr},${dr} 0 0,1 ${target.x},${target.y}`;
+        }
+      });
+
+      // Update link hit areas
+      linkHitArea.attr("d", d => {
         const source = typeof d.source === 'string' ? nodes.find(n => n.id === d.source) : d.source;
         const target = typeof d.target === 'string' ? nodes.find(n => n.id === d.target) : d.target;
 
